@@ -1,0 +1,309 @@
+import pandas as pd
+import json
+import dash_mantine_components as dmc
+from dash_iconify import DashIconify
+
+import dash_design_kit as ddk
+from dash_extensions.enrich import (
+    DashProxy,
+    dcc,
+    html,
+    Input,
+    OperatorOutput,
+    Operator,
+    OperatorTransform,
+)
+import plotly.express as px
+from dash import State, Output, no_update
+from dash.exceptions import PreventUpdate
+
+from assets.theme import theme
+
+app = DashProxy(transforms=[OperatorTransform()])
+app.title = "Operator Transform Demo"
+server = app.server  # expose server variable for Procfile
+
+
+with open("assets/cbsa_tiger2013.json", "r") as fp:
+    MSA_json = json.load(fp)
+    MSA_json["features"] = MSA_json["features"]
+
+df = pd.DataFrame()
+df["GEOID"] = [i["properties"]["GEOID"] for i in MSA_json["features"]]
+
+
+df["some_values"] = (
+    pd.Series(range(1, 12)).sample(int(len(df)), replace=True).array
+)
+
+
+app.layout = dmc.MantineProvider(
+    theme={"colorScheme": "dark"},
+    children=ddk.App(
+        [
+            ddk.Header(
+                [
+                    ddk.Title("Operator Transform Demo"),
+                    html.Div(
+                        [
+                            html.A(
+                                dmc.Tooltip(
+                                    dmc.ThemeIcon(
+                                        DashIconify(
+                                            icon="eva:code-download-fill",
+                                            width=22,
+                                        ),
+                                        radius=30,
+                                        size=36,
+                                        variant="outline",
+                                        color="gray",
+                                    ),
+                                    label="Source Code",
+                                    position="bottom",
+                                    style={
+                                        "marginRight": "16px",
+                                    },
+                                ),
+                                id="all_files",
+                            ),
+                            dcc.Download(id="download_all_files"),
+                        ]
+                    ),
+                ]
+            ),
+            ddk.Card(
+                dcc.Markdown(
+                    "In these examples, we demonstrate performance improvements by leveraging `dash_extensions.OperatorTransform`. Download this application using the button in the header to test locally. \n\n Both maps show the same dataset and use the same 80mb, high-resolution geoJSON file. Because we do not need to update the actual geoJSON layer -- just the attributes of that layer -- we can partially update the component using `OperatorTransform`. This results in massive improvements to performance after initial page load.\n\n Note that in **any** web framework, loading an 80mb+ file will have impacts on initial page load, as this high-resolution graphic must be shipped over the network. Partial property updates are an architectural technique to prevent unnecessary shipments of this geoJSON after initial render."
+                )
+            ),
+            ddk.Row(
+                [
+                    ddk.Card(
+                        [
+                            ddk.CardHeader(
+                                title="Mapbox controlled with OperatorTransform",
+                                modal=True,
+                            ),
+                            dcc.Markdown(
+                                'In this example, we use `OperatorTransform` to only update the `["marker"]["opacity"]` property of the figure, rather than redrawing the entire figure. Practical use may mean you update other values, for example modifying the layout or data (but since we rarely -- if ever -- need to redraw the geoJSON, we can avoid this expensive step in most cases). The 80mb geoJSON file only needs to be shipped over the network at initial page load, so subsequent interactions occur nearly instantaneously.'
+                            ),
+                            dmc.LoadingOverlay(
+                                [
+                                    ddk.Graph(
+                                        id="graph",
+                                        figure=px.choropleth_mapbox(
+                                            df,
+                                            locations="GEOID",
+                                            featureidkey="properties.GEOID",
+                                            color="some_values",
+                                            color_continuous_scale="Viridis",
+                                            range_color=(0, 12),
+                                            mapbox_style="carto-positron",
+                                            zoom=3,
+                                            center={
+                                                "lat": 37.0902,
+                                                "lon": -95.7129,
+                                            },
+                                            opacity=0.5,
+                                            labels={
+                                                "some_values": "Employment By Industry"
+                                            },
+                                        ),
+                                    ),
+                                    html.Div(id="graph-loading"),
+                                ]
+                            ),
+                            dcc.Store(id="has-geo", data=False),
+                            # dcc.Slider(0, 1, 0.05, value=0.5, id="opacity"),
+                            dcc.Dropdown(
+                                options = df.GEOID.unique() , id="dropdown"
+                            ),
+                        ]
+                    ),
+                    ddk.Card(
+                        [
+                            ddk.CardHeader(
+                                title="Mapbox updated without using OperatorTransform",
+                                modal=True,
+                            ),
+                            dcc.Markdown(
+                                "In this example, dragging the callback slider will redraw the entire figure. Every change will ship the entire 80mb geoJSON file over the network, meaning that load times for interactions are much slower."
+                            ),
+                            dmc.LoadingOverlay(
+                                ddk.Graph(
+                                    id="graph_traditional",
+                                    figure=px.choropleth_mapbox(
+                                        mapbox_style="carto-positron",
+                                        zoom=3,
+                                        center={
+                                            "lat": 37.0902,
+                                            "lon": -95.7129,
+                                        },
+                                    ),
+                                ),
+                            ),
+                            # dcc.Slider(
+                            #     0, 1, 0.05, value=0.5, id="opacity_traditional"
+                            # ),
+                            dcc.Dropdown(
+                                options = df.GEOID.unique() , id="dropdown-traditional"
+                            ),
+                        ]
+                    ),
+                ]
+            ),
+            ddk.Card(
+                [
+                    dcc.Markdown(
+                        """The callback logic follows this premise. Notice that the GeoJSON property is **only assigned on inititial load**, and persisted during subsequent interactions."""
+                    ),
+                    dmc.Prism(
+                        language="python",
+                        children="""
+@app.callback(
+    OperatorOutput("graph", "figure"),
+    Output("has-geo", "data"),
+    Output("graph-loading", "children"),
+    Input("opacity", "value"),
+    State("has-geo", "data"),
+)
+def change_color(opacity, has_geo):
+    operator = Operator()
+    operator["data"][0]["marker"]["opacity"].assign(opacity)
+
+    # Assign a geoJSON format at page load. We use a flag in `has-geo` to tell us whether the GeoJSON has been set yet.
+    # Following this pattern means we can load the simple layout and relegate most of this work to a callback, so users can interact with the page faster.
+    if not has_geo:
+        operator["data"][0]["geojson"].assign(MSA_json)
+
+    return (operator, True, no_update)
+            """,
+                    ),
+                ]
+            ),
+        ],
+        theme=theme,
+    ),
+)
+
+@app.callback(
+    Output("graph_traditional", "figure"),
+    Input("dropdown_traditional", "value"),
+)
+def change_graph(GEOID):
+    if not GEOID:
+        return no_update
+    else:
+        fig =
+
+@app.callback(
+    Output("graph_traditional", "figure"),
+    Input("opacity_traditional", "value"),
+)
+def change_color_traditional(opacity):
+    fig = {
+        "data": [
+            {
+                "coloraxis": "coloraxis",
+                "featureidkey": "properties.GEOID",
+                "hovertemplate": "GEOID=%{location}<br>Employment By Industry=%{z}<extra></extra>",
+                "locations": list(df["GEOID"]),
+                "marker": {"opacity": opacity},
+                "name": "",
+                "subplot": "mapbox",
+                "z": list(df["some_values"]),
+                "type": "choroplethmapbox",
+                "geojson": MSA_json,
+            }
+        ],
+        "layout": {
+            "template": {
+                "layout": {
+                    "colorscale": {
+                        "sequential": [
+                            [0, "var(--colorscale-0)"],
+                            [0.1111111111111111, "var(--colorscale-1)"],
+                            [0.2222222222222222, "var(--colorscale-2)"],
+                            [0.3333333333333333, "var(--colorscale-3)"],
+                            [0.4444444444444444, "var(--colorscale-4)"],
+                            [0.5555555555555556, "var(--colorscale-5)"],
+                            [0.6666666666666666, "var(--colorscale-6)"],
+                            [0.7777777777777778, "var(--colorscale-7)"],
+                            [0.8888888888888888, "var(--colorscale-8)"],
+                            [1, "var(--colorscale-9)"],
+                        ]
+                    },
+                    "colorway": [
+                        "var(--colorway-0)",
+                        "var(--colorway-1)",
+                        "var(--colorway-2)",
+                        "var(--colorway-3)",
+                        "var(--colorway-4)",
+                        "var(--colorway-5)",
+                        "var(--colorway-6)",
+                        "var(--colorway-7)",
+                        "var(--colorway-8)",
+                        "var(--colorway-9)",
+                    ],
+                    "margin": {"t": 0},
+                }
+            },
+            "mapbox": {
+                "domain": {"x": [0, 1], "y": [0, 1]},
+                "center": {"lat": 37.0902, "lon": -95.7129},
+                "zoom": 3,
+                "style": "carto-positron",
+            },
+            "coloraxis": {
+                "colorbar": {"title": {"text": "Employment By Industry"}},
+                "colorscale": [
+                    [0, "#440154"],
+                    [0.1111111111111111, "#482878"],
+                    [0.2222222222222222, "#3e4989"],
+                    [0.3333333333333333, "#31688e"],
+                    [0.4444444444444444, "#26828e"],
+                    [0.5555555555555556, "#1f9e89"],
+                    [0.6666666666666666, "#35b779"],
+                    [0.7777777777777778, "#6ece58"],
+                    [0.8888888888888888, "#b5de2b"],
+                    [1, "#fde725"],
+                ],
+                "cmin": 0,
+                "cmax": 12,
+            },
+            "legend": {"tracegroupgap": 0},
+        },
+    }
+    return fig
+
+
+@app.callback(
+    OperatorOutput("graph", "figure"),
+    Output("has-geo", "data"),
+    Output("graph-loading", "children"),
+    Input("opacity", "value"),
+    State("has-geo", "data"),
+)
+def change_color(opacity, has_geo):
+    operator = Operator()
+    operator["data"][0]["marker"]["opacity"].assign(opacity)
+
+    # Assign a geoJSON format at page load. We use a flag in `has-geo` to tell us whether the GeoJSON has been set yet.
+    # Following this pattern means we can load the simple layout and relegate most of this work to a callback, so users can interact with the page faster.
+    if not has_geo:
+        operator["data"][0]["geojson"].assign(MSA_json)
+
+    return (operator, True, no_update)
+
+
+@app.callback(
+    Output("download_all_files", "data"),
+    Input("all_files", "n_clicks"),
+    prevent_initial_call=True,
+)
+def download_all_files(n_clicks):
+    return dcc.send_file("assets/deloitte-demos.zip")
+
+
+if __name__ == "__main__":
+    app.run_server(debug=True)

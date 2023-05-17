@@ -1,0 +1,220 @@
+import pandas as pd
+import json
+import dash_mantine_components as dmc
+from dash_iconify import DashIconify
+from dash import Dash, Input, Output, no_update, State, Patch, html, dcc
+import plotly.express as px
+import dash_design_kit as ddk
+
+from assets.theme import theme
+
+app = Dash(__name__)
+app.title = "Partial Properties Update Demo"
+server = app.server
+
+with open("assets/cbsa_tiger2013.json", "r") as fp:
+    MSA_json = json.load(fp)
+    MSA_json["features"] = MSA_json["features"]
+
+df = pd.DataFrame()
+df["GEOID"] = [i["properties"]["GEOID"] for i in MSA_json["features"]]
+df["NAME"] = [i["properties"]["NAME"] for i in MSA_json["features"]]
+df["some_values"] = (
+    pd.Series(range(1, 12)).sample(int(len(df)), replace=True).array
+)
+
+fig = {
+        "data": [
+            {
+                "coloraxis": "coloraxis",
+                "featureidkey": "properties.GEOID",
+                "hovertemplate": "GEOID=%{location}<br>Employment By Industry=%{z}<extra></extra>",
+                "locations": list(df["GEOID"]),
+                # "marker": {"GEOID": geoid},
+                "name": "NAME",
+                "subplot": "mapbox",
+                "z": list(df["some_values"]),
+                "type": "choroplethmapbox",
+                "geojson": MSA_json,
+            }
+        ],
+        "layout": {
+            "template": {
+                "layout": {
+                    "colorscale": {
+                        "sequential": [
+                            [0, "var(--colorscale-0)"],
+                            [0.1111111111111111, "var(--colorscale-1)"],
+                            [0.2222222222222222, "var(--colorscale-2)"],
+                            [0.3333333333333333, "var(--colorscale-3)"],
+                            [0.4444444444444444, "var(--colorscale-4)"],
+                            [0.5555555555555556, "var(--colorscale-5)"],
+                            [0.6666666666666666, "var(--colorscale-6)"],
+                            [0.7777777777777778, "var(--colorscale-7)"],
+                            [0.8888888888888888, "var(--colorscale-8)"],
+                            [1, "var(--colorscale-9)"],
+                        ]
+                    },
+                    "colorway": [
+                        "var(--colorway-0)",
+                        "var(--colorway-1)",
+                        "var(--colorway-2)",
+                        "var(--colorway-3)",
+                        "var(--colorway-4)",
+                        "var(--colorway-5)",
+                        "var(--colorway-6)",
+                        "var(--colorway-7)",
+                        "var(--colorway-8)",
+                        "var(--colorway-9)",
+                    ],
+                    "margin": {"t": 0},
+                }
+            },
+            "mapbox": {
+                "domain": {"x": [0, 1], "y": [0, 1]},
+                "center": {"lat": 37.0902, "lon": -95.7129},
+                "zoom": 3,
+                "style": "carto-positron",
+            },
+            "coloraxis": {
+                "colorbar": {"title": {"text": "Employment By Industry"}},
+                "colorscale": [
+                    [0, "#440154"],
+                    [0.1111111111111111, "#482878"],
+                    [0.2222222222222222, "#3e4989"],
+                    [0.3333333333333333, "#31688e"],
+                    [0.4444444444444444, "#26828e"],
+                    [0.5555555555555556, "#1f9e89"],
+                    [0.6666666666666666, "#35b779"],
+                    [0.7777777777777778, "#6ece58"],
+                    [0.8888888888888888, "#b5de2b"],
+                    [1, "#fde725"],
+                ],
+                "cmin": 0,
+                "cmax": 12,
+            },
+            "legend": {"tracegroupgap": 0},
+        },
+}
+# fig.update_traces(marker=dict(color="blue"))
+
+app.layout = dmc.MantineProvider(
+    theme={"colorScheme" : "dark"},
+    children=ddk.App(
+        [
+            ddk.Header(
+                [
+                    ddk.Title("Partial Properties Update Demo"),
+                    html.Div(
+                        [
+                            html.A(
+                                dmc.Tooltip(
+                                    dmc.ThemeIcon(
+                                        DashIconify(
+                                         icon="eva:code-download-fill",
+                                         width=22,
+                                        ),
+                                        radius=30,
+                                        size=36,
+                                        variant="outline",
+                                        color="gray",
+                                    ),
+                                    label="Source Code",
+                                    position="bottom",
+                                    style={
+                                        "marginRight": "16px",
+                                    },
+                                ),
+                                id="all-files",
+                            ),
+                            dcc.Download(id="download_all_files"),
+                        ]
+                    ),
+                ]
+            ),
+            ddk.Card(
+                dcc.Markdown(
+                    "We will show the true power of using the Patch() funciton and producing production level applications using Dash Enterprise"
+                )
+            ),
+            ddk.Row(
+                [
+                    ddk.Card(
+                        [
+                            ddk.CardHeader(
+                                title="Mapbox values controlled using Patch Class",
+                                modal=True,
+                            ),
+                            dcc.Markdown(
+                                "Using Partial Property Updates"
+                            ),
+                            dmc.LoadingOverlay(
+                                [
+                                    ddk.Graph(
+                                        id="graph",
+                                        figure=px.choropleth_mapbox(
+                                            df,
+                                            locations="GEOID",
+                                            featureidkey="properties.GEOID",
+                                            color="some_values",
+                                            color_continuous_scale="Viridis",
+                                            range_color=(0, 12),
+                                            mapbox_style="carto-positron",
+                                            zoom=3,
+                                            center={
+                                                "lat": 37.0902,
+                                                "lon": -95.7129,
+                                            },
+                                            opacity=0.5,
+                                            labels={
+                                                "some_values": "Employment By Industry"
+                                            },
+                                        ),
+                                    ),
+                                    html.Div(id="graph-loading"),
+                                ]
+                            ),
+                            dcc.Store(id="has-geo", data=False),
+                            dcc.Slider(0, 1, 0.05, value=1, id="opacity"),
+                            dcc.Dropdown(
+                                value='Rochester, MN',
+                                options=df.NAME.unique(),
+                                id="dropdown",
+                            ),
+                        ]
+                    ),
+                ]
+            ),
+        ]
+    ),
+)
+
+@app.callback(
+    Output("graph", "figure"),
+    Input("opacity", "value"),
+)
+def change_color(opacity):
+    patched_figure = Patch()
+    patched_figure["data"][0]["marker"]["opacity"] = opacity
+    return patched_figure
+    # return fig
+    # patched_figure = Patch()
+    # patched_figure["data"][0]["marker"]["opacity"] = opacity
+    # return patched_figure
+
+
+# def mark_geoid(value):
+#     # if not value:
+#     return fig
+#     # else:
+#     #     return [o for o in figure if value in o["GEOID"]]
+#     # if not geoid:
+#     #     return no_update
+#     # else:
+#     #     updated_marker_color = ["red" if GEOID == geoid else "blue" for GEOID in df.GEOID]
+#     #     updated_marker_size = [24 if GEOID == geoid else 6 for GEOID in df.GEOID]
+
+
+
+if __name__=='__main__':
+    app.run_server(debug=True)
